@@ -4,13 +4,16 @@ Serverless deployment for Vercel - Using ONNX Runtime
 """
 
 import os
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import onnxruntime as ort
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+
+# Import feature extractor
+from .feature_extractor import extract_features_from_url
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -88,12 +91,27 @@ class PredictionInput(BaseModel):
     )
 
 
+class URLInput(BaseModel):
+    """Input schema untuk check URL langsung"""
+    url: str = Field(..., description="URL yang akan dianalisis", min_length=5)
+
+
 class PredictionOutput(BaseModel):
     """Output schema untuk hasil prediksi"""
     prediction: int = Field(..., description="Prediction result: -1 (phishing) or 1 (legitimate)")
     label: str = Field(..., description="Human-readable label: 'phishing' or 'legitimate'")
     probability: float = Field(..., description="Confidence score (0-1)")
     message: str = Field(..., description="Description of the result")
+
+
+class URLCheckOutput(BaseModel):
+    """Output schema untuk hasil check URL"""
+    url: str = Field(..., description="URL yang dianalisis")
+    prediction: int = Field(..., description="Prediction result: -1 (phishing) or 1 (legitimate)")
+    label: str = Field(..., description="Human-readable label: 'phishing' or 'legitimate'")
+    probability: float = Field(..., description="Confidence score (0-1)")
+    message: str = Field(..., description="Description of the result")
+    features_extracted: dict = Field(..., description="Detail fitur yang diekstrak")
 
 
 class HealthResponse(BaseModel):
@@ -189,7 +207,73 @@ async def predict_phishing(input_data: PredictionInput):
         )
 
 
+@app.post("/check-url", response_model=URLCheckOutput)
+async def check_url(input_data: URLInput):
+    """
+    🔍 Check URL untuk phishing detection.
+    
+    Menerima URL langsung dan melakukan:
+    1. Ekstraksi 25 fitur dari URL
+    2. Prediksi menggunakan model ONNX
+    3. Mengembalikan hasil dengan detail fitur
+    
+    - **url**: URL lengkap yang akan dianalisis (contoh: https://example.com)
+    """
+    try:
+        url = input_data.url
+        
+        # Add scheme if missing
+        if not url.startswith('http://') and not url.startswith('https://'):
+            url = 'http://' + url
+        
+        # Extract features from URL
+        extraction_result = extract_features_from_url(url)
+        features = extraction_result["features"]
+        
+        # Load ONNX model
+        loaded_session = load_model()
+        
+        # Prepare input (ONNX expects float32)
+        features_array = np.array(features, dtype=np.float32).reshape(1, -1)
+        
+        # Get input name from model
+        input_name = loaded_session.get_inputs()[0].name
+        
+        # Run prediction
+        results = loaded_session.run(None, {input_name: features_array})
+        
+        # results[0] = label, results[1] = probabilities
+        prediction = int(results[0][0])
+        probabilities = results[1][0]
+        
+        # Model uses -1 for phishing (index 0) and 1 for legitimate (index 1)
+        if prediction == -1:
+            label = "phishing"
+            probability = float(probabilities[0])
+            message = "⚠️ URL ini terdeteksi sebagai PHISHING. Hindari mengakses URL ini."
+        else:
+            label = "legitimate"
+            probability = float(probabilities[1])
+            message = "✅ URL ini terdeteksi sebagai LEGITIMATE (aman)."
+        
+        return URLCheckOutput(
+            url=input_data.url,
+            prediction=prediction,
+            label=label,
+            probability=round(probability, 4),
+            message=message,
+            features_extracted=extraction_result["details"]
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"URL check failed: {str(e)}"
+        )
+
+
 # For local testing
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
