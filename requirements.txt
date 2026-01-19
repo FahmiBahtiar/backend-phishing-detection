@@ -1,6 +1,5 @@
 fastapi
 uvicorn[standard]
-scikit-learn
+onnxruntime
 numpy
-pandas
 python-multipart

@@ -1,26 +1,21 @@
 """
 FastAPI Backend for Phishing Detection
-Serverless deployment for Vercel
+Serverless deployment for Vercel - Using ONNX Runtime
 """
 
 import os
 from typing import List
 
 import numpy as np
+import onnxruntime as ort
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-# Use joblib for better model loading compatibility
-try:
-    import joblib
-except ImportError:
-    import pickle as joblib
-
 # Initialize FastAPI app
 app = FastAPI(
     title="Phishing Detection API",
-    description="API untuk mendeteksi URL phishing menggunakan Random Forest model",
+    description="API untuk mendeteksi URL phishing menggunakan Random Forest model (ONNX)",
     version="1.0.0"
 )
 
@@ -33,20 +28,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load model saat startup
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "model", "rf_model_25_features.pkl")
+# Load model saat startup - using ONNX
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "model", "rf_model_25_features.onnx")
 
-model = None
+session = None
 
 def load_model():
-    """Load model dari file .pkl using joblib"""
-    global model
-    if model is None:
+    """Load ONNX model"""
+    global session
+    if session is None:
         try:
-            model = joblib.load(MODEL_PATH)
+            session = ort.InferenceSession(MODEL_PATH)
         except Exception as e:
             raise RuntimeError(f"Failed to load model: {e}")
-    return model
+    return session
 
 
 # 25 fitur yang digunakan model (urutan sesuai training)
@@ -116,11 +111,11 @@ async def health_check():
     Memeriksa status API dan model.
     """
     try:
-        loaded_model = load_model()
+        loaded_session = load_model()
         return HealthResponse(
             status="healthy",
-            message="Phishing Detection API is running",
-            model_loaded=loaded_model is not None,
+            message="Phishing Detection API is running (ONNX)",
+            model_loaded=loaded_session is not None,
             features_count=len(FEATURE_NAMES)
         )
     except Exception as e:
@@ -154,34 +149,36 @@ async def predict_phishing(input_data: PredictionInput):
     Response time target: < 250ms
     """
     try:
-        # Load model
-        loaded_model = load_model()
+        # Load ONNX model
+        loaded_session = load_model()
         
-        # Prepare input
-        features_array = np.array(input_data.features).reshape(1, -1)
+        # Prepare input (ONNX expects float32)
+        features_array = np.array(input_data.features, dtype=np.float32).reshape(1, -1)
         
-        # Predict
-        prediction = loaded_model.predict(features_array)[0]
+        # Get input name from model
+        input_name = loaded_session.get_inputs()[0].name
         
-        # Get probability
-        probability_scores = loaded_model.predict_proba(features_array)[0]
+        # Run prediction
+        results = loaded_session.run(None, {input_name: features_array})
         
-        # Model uses -1 for phishing and 1 for legitimate
+        # results[0] = label, results[1] = probabilities
+        prediction = int(results[0][0])
+        probabilities = results[1][0]  # Array of probabilities for each class
+        
+        # Model uses -1 for phishing (index 0) and 1 for legitimate (index 1)
         if prediction == -1:
             label = "phishing"
-            # Probability for phishing class
-            probability = float(probability_scores[0])
+            probability = float(probabilities[0])  # Probability for phishing class
             message = "⚠️ URL ini terdeteksi sebagai PHISHING. Hindari mengakses URL ini."
         else:
             label = "legitimate"
-            # Probability for legitimate class
-            probability = float(probability_scores[1])
+            probability = float(probabilities[1])  # Probability for legitimate class
             message = "✅ URL ini terdeteksi sebagai LEGITIMATE (aman)."
         
         return PredictionOutput(
-            prediction=int(prediction),
+            prediction=prediction,
             label=label,
-            probability=probability,
+            probability=round(probability, 4),
             message=message
         )
         
