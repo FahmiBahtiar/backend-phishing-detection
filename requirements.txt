@@ -4,4 +4,3 @@ onnxruntime
 numpy
 python-multipart
 requests
-skl2onnx
