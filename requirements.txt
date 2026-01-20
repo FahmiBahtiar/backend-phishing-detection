@@ -5,4 +5,3 @@ numpy
 python-multipart
 requests
 skl2onnx
-scikit-learn
