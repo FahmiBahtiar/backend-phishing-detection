@@ -32,7 +32,7 @@ app.add_middleware(
 )
 
 # Load model saat startup - using ONNX
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "model", "rf_model_25_features.onnx")
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "model", "rf_model.onnx")
 
 session = None
 
@@ -186,11 +186,18 @@ async def predict_phishing(input_data: PredictionInput):
         # Model uses -1 for phishing (index 0) and 1 for legitimate (index 1)
         if prediction == -1:
             label = "phishing"
-            probability = float(probabilities[0])  # Probability for phishing class
+            # Handle ZipMap (dict) vs Array output
+            if isinstance(probabilities, dict):
+                probability = float(probabilities.get(-1, 0.0))
+            else:
+                probability = float(probabilities[0])
             message = "⚠️ URL ini terdeteksi sebagai PHISHING. Hindari mengakses URL ini."
         else:
             label = "legitimate"
-            probability = float(probabilities[1])  # Probability for legitimate class
+            if isinstance(probabilities, dict):
+                probability = float(probabilities.get(1, 0.0))
+            else:
+                probability = float(probabilities[1])
             message = "✅ URL ini terdeteksi sebagai LEGITIMATE (aman)."
         
         return PredictionOutput(
@@ -249,11 +256,18 @@ async def check_url(input_data: URLInput):
         # Model uses -1 for phishing (index 0) and 1 for legitimate (index 1)
         if prediction == -1:
             label = "phishing"
-            probability = float(probabilities[0])
+            # Handle ZipMap (dict) vs Array output
+            if isinstance(probabilities, dict):
+                probability = float(probabilities.get(-1, 0.0))
+            else:
+                probability = float(probabilities[0])
             message = "⚠️ URL ini terdeteksi sebagai PHISHING. Hindari mengakses URL ini."
         else:
             label = "legitimate"
-            probability = float(probabilities[1])
+            if isinstance(probabilities, dict):
+                probability = float(probabilities.get(1, 0.0))
+            else:
+                probability = float(probabilities[1])
             message = "✅ URL ini terdeteksi sebagai LEGITIMATE (aman)."
         
         return URLCheckOutput(
